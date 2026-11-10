@@ -1529,7 +1529,7 @@ EVENTS.mugung = {
 const RP = { y: [430, 690], x0: 300, x1: 1300 };
 EVENTS.rope = {
   id: 'rope', name: '단체 줄넘기', btn: '점프', dur: 120, est: 180, ready: true, move: false, beat: true, noReplay: true,
-  rule: '팀마다 자기 줄에 저절로 서요. 줄이 발밑에 올 때 [점프]! 거의 다 같이(10명 중 8명) 넘어야 1회예요. 넘을수록 줄이 빨라져요.',
+  rule: '팀마다 자기 줄에 저절로 서요. 줄이 발밑에 올 때 [점프]! 거의 다 같이(10명 중 8명) 넘어야 1회예요. 넘을수록 줄이 빨라져요. AI 친구는 세지 않아요.',
   hq: '어떻게 박자를 맞출까? (하나, 둘, 셋!)',
   stat: { fmt: v => `${v}회` }, line: n => `줄을 ${n}번 함께 넘었어요`, praise: { title: '줄을 끝까지 함께 넘었어요', det: n => `${n}회` },
   setup(G) { return { T: [0, 1].map(() => ({ ph: 0.3, per: 1.5, ps: 0, ev: 0, last: {} })), sc: [0, 0], c: {}, lg: {}, m: null, mt: 0 }; },
@@ -1547,7 +1547,8 @@ EVENTS.rope = {
       if (T.ev > 0) {
         T.ev -= dt;
         if (T.ev <= 0) {
-          const L = teamOf(G, t); let ok = 0; const jumped = [];
+          const L = teamOf(G, t).filter(p => !p.ai); let ok = 0; const jumped = [];
+          for (const p of teamOf(G, t)) if (p.ai) p.air = p.airMax = 0.42;
           for (const p of L) { const l = T.last[p.id] || { g: p.in.g || 0, m: p.in.m || 0 }; const g = (p.in.g || 0) - l.g, m = (p.in.m || 0) - l.m; T.last[p.id] = { g: p.in.g || 0, m: p.in.m || 0 }; if (g >= 1 && m <= 1) { ok++; jumped.push(p); } }
           const need = Math.max(1, Math.ceil(L.length * 0.8));
           if (L.length && ok >= need) { if (!practice) es.sc[t]++; for (const p of jumped) addC(es, p, 1, practice); T.per = Math.max(0.8, T.per - 0.04); G.sfx('pop', 0.05); }
@@ -1579,7 +1580,7 @@ EVENTS.rope = {
   },
   over(ctx, o, t) { this.rope(ctx, o, t, true); },
   msg: msgOf,
-  bot(G, es, p, inp) { const T = es.T[p.team]; if (T.ps <= 0 && Math.abs(T.ph - T.per) < 0.05 && Math.random() < 0.92) inp.g = (inp.g || 0) + 1; return null; },
+  bot(G, es, p, inp) { if (p.ai) return null; const T = es.T[p.team]; if (T.ps <= 0 && Math.abs(T.ph - T.per) < 0.05 && Math.random() < 0.92) inp.g = (inp.g || 0) + 1; return null; },
   card(ctx, w, h, t) {
     ctx.fillStyle = COL.ground; ctx.fillRect(0, 0, w, h);
     const a = t * 4, s = Math.cos(a), lift = s > 0.6 ? 26 : 0;
@@ -2033,6 +2034,8 @@ function removePlayer(p, noSync) {
   if (!p.ai && !noSync) syncAI();
 }
 // ---------- AI 친구: 팀 인원이 모자라면 채워요 (최소 3대3) ----------
+// AI 친구 실력: 학생보다 조금 못하게 (느림, 늦은 반응, 버튼 절반만, 가끔 멈춤)
+const AI = { speed: 0.85, react: [0.3, 0.6], wobble: 24, idleChance: 0.08, press: 0.6, beat: 0.55 };
 function aiOn() { try { return localStorage.getItem('sd-ai') !== '0'; } catch (e) { return true; } }
 function setAiOn(v) { try { localStorage.setItem('sd-ai', v ? '1' : '0'); } catch (e) { } syncAI(); }
 function realCount() { return G.players.filter(p => !p.ai).length; }
@@ -2304,7 +2307,7 @@ function simulate(dt) {
     if (canMove) {
       let jx = isConn(p) ? (+p.in.jx || 0) : 0, jy = isConn(p) ? (+p.in.jy || 0) : 0;
       const l = Math.hypot(jx, jy); if (l > 1) { jx /= l; jy /= l; }
-      const sp = SPEED * (ev.speed ? ev.speed(G, es, p) : 1);
+      const sp = SPEED * (ev.speed ? ev.speed(G, es, p) : 1) * (p.ai ? AI.speed : 1);
       p.vx = jx * sp; p.vy = jy * sp; p.x += p.vx * dt; p.y += p.vy * dt;
       if (Math.abs(jx) > 0.08) p.flip = jx < 0;
     } else { p.vx = p.vy = 0; }
@@ -2385,17 +2388,26 @@ function bots(dt) {
     let tx = B.tx, ty = B.ty;
     if (G.ph === 'play' || G.ph === 'prep' || G.ph === 'countdown') {
       if (ev.id === 'ball') { const b = es.balls.filter(b => !b.gone).sort((a, c) => dist2(a.x, a.y, p.x, p.y) - dist2(c.x, c.y, p.x, p.y))[0]; if (b) { tx = b.x + (p.team === 0 ? -40 : 40); ty = b.y + rnd(-10, 10); if (dist2(b.x, b.y, p.x, p.y) < 80 * 80 && Math.random() < 0.05) inp.b = (inp.b || 0) + 1; } }
-      else if (ev.id === 'hurdle') { const f = HFLAGS[es.nf[p.id] || 0]; tx = f[0]; ty = f[1]; if (Math.random() < 0.06) inp.b = (inp.b || 0) + 1; }
-      else if (ev.id === 'tug') { if (es.bt < 0.04 && Math.random() < 0.75) inp.g = (inp.g || 0) + 1; if (Math.random() < 0.01) inp.m = (inp.m || 0) + 1; }
+      else if (ev.id === 'hurdle') { const f = HFLAGS[es.nf[p.id] || 0]; tx = f[0]; ty = f[1]; const nearH = HURDLES.some(h => { const cx = clamp(p.x, h[0], h[0] + h[2]), cy = clamp(p.y, h[1], h[1] + h[3]); return dist2(cx, cy, p.x, p.y) < 40 * 40; }); if (Math.random() < (nearH ? 0.15 : 0.03)) inp.b = (inp.b || 0) + 1; }
+      else if (ev.id === 'tug') { if (es.bt < 0.04 && Math.random() < (p.ai ? AI.beat : 0.75)) inp.g = (inp.g || 0) + 1; if (Math.random() < 0.01) inp.m = (inp.m || 0) + 1; }
       else if (ev.bot) { const r = ev.bot(G, es, p, inp, B); if (r) { tx = r[0]; ty = r[1]; } else { tx = p.x; ty = p.y; } }
       else if (B.t <= 0) { B.tx = rnd(FIELD.x + 40, FIELD.r - 40); B.ty = rnd(FIELD.y + 40, FIELD.b - 40); B.t = rnd(1, 3); }
     } else if (G.ph === 'cheer') {
-      const turn = Math.floor(G.pt / 3); if (turn % 2 === p.team && Math.random() < 0.25) inp.d = (inp.d || 0) + 1;
+      const turn = Math.floor(G.pt / 3); if (turn % 2 === p.team && Math.random() < (p.ai ? 0.12 : 0.25)) inp.d = (inp.d || 0) + 1;
     } else if (B.t <= 0) { B.tx = rnd(FIELD.x + 40, FIELD.r - 40); B.ty = rnd(FIELD.y + 40, FIELD.b - 40); B.t = rnd(1, 4); }
+    if (p.ai) {
+      // 반응이 늦고(목표를 가끔만 다시 봄), 가끔 멍하니 서 있어요
+      B.rt = (B.rt || 0) - dt; B.idle = (B.idle || 0) - dt;
+      if (B.rt <= 0 || B.ax == null) { B.ax = tx + rnd(-AI.wobble, AI.wobble); B.ay = ty + rnd(-AI.wobble, AI.wobble); B.rt = rnd(AI.react[0], AI.react[1]); }
+      tx = B.ax; ty = B.ay;
+      if (B.idle <= 0 && Math.random() < AI.idleChance * dt) B.idle = rnd(0.6, 1.6);
+      if (B.idle > 0) { tx = p.x; ty = p.y; }
+    }
     const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy);
     if (d > 12) { inp.jx = dx / d * 0.9; inp.jy = dy / d * 0.9; } else { inp.jx = inp.jy = 0; }
     if (p.lastB == null) p.lastB = 0;
-    const nb = (inp.b || 0) - p.lastB; p.lastB = inp.b || 0; if (nb > 0) onButton(p);
+    const nb = (inp.b || 0) - p.lastB; p.lastB = inp.b || 0;
+    if (nb > 0 && !(p.ai && (B.idle > 0 || Math.random() > AI.press))) onButton(p);
     if (Math.random() < 0.02) p.lastMove = nowS();
   }
 }
