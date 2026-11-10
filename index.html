@@ -137,6 +137,7 @@ input{font-family:inherit}
 .roster button{display:block;background:none;border:none;color:#f3ecd9;font-size:27px;padding:1px 0;text-align:left;width:100%}
 .roster button::before{content:"▪ ";color:#9fb0a6}
 .roster button.off{opacity:.4}
+.roster button.ai{color:#9fd0e0}
 .roster button:hover{color:var(--yellow)}
 .codeD{font-size:168px;font-weight:700;letter-spacing:2px;line-height:1;color:var(--ink)}
 .tag{display:inline-block;background:var(--red);color:#fff3dc;padding:4px 12px;font-size:30px;font-weight:700}
@@ -486,7 +487,7 @@ function fmtTime(sec) { sec = Math.max(0, Math.ceil(sec)); return Math.floor(sec
 function fmtMin(sec) { const m = Math.floor(sec / 60), s = Math.round(sec % 60); return s ? `약 ${m}분 ${s}초` : `약 ${m}분`; }
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const ANIMALS = ['토끼', '펭귄', '수달', '판다', '코알라', '너구리', '다람쥐', '알파카', '햄스터', '고슴도치', '부엉이', '돌고래', '거북이', '참새', '까치', '사슴', '여우', '고래', '해마', '병아리', '오리', '기린', '얼룩말', '하마', '치타', '비버', '퓨마', '미어캣', '두더지', '청설모', '악어', '독수리', '물개', '라쿤', '토끼풀', '반딧불'];
+const ANIMALS = ['토끼', '펭귄', '수달', '판다', '코알라', '너구리', '다람쥐', '알파카', '햄스터', '고슴도치', '부엉이', '돌고래', '거북이', '참새', '까치', '사슴', '여우', '고래', '해마', '병아리', '오리', '기린', '얼룩말', '하마', '치타', '비버', '퓨마', '미어캣', '두더지', '청설모', '악어', '독수리', '물개', '라쿤', '고양이', '강아지'];
 const CLASSES = [
   ...[1, 2, 3, 4, 5, 6, 7].map(n => ({ id: '3-' + n, grade: 3, label: `3학년 ${n}반` })),
   ...[8, 9, 10].map(n => ({ id: '6-' + n, grade: 6, label: `6학년 ${n}반` })),
@@ -1998,7 +1999,7 @@ async function hostOpenRoom(clsId) {
     catch (e) { if (e.message !== 'taken') { G.net = net; G.room = room; break; } }
   }
   G.netWarn = (NET_MODE !== 'local' && G.net && !G.net.modes.includes('peer') && !G.net.modes.includes('fb')) ? '연결 서버에 못 붙었어요. 인터넷을 확인하고 방을 다시 열어 보세요.' : '';
-  G.players = []; G.byCid.clear(); G.nextId = 0; G.requests = [];
+  G.players = []; G.byCid.clear(); G.nextId = 0; G.requests = []; G.manualTeams = false;
   resetToday();
   enterLobby();
   const nb = +(Q.get('bots') || 0); for (let i = 0; i < nb; i++) addBot();
@@ -2013,21 +2014,44 @@ function hostCloseRoom() {
 
 // ---------- 선수 ----------
 function addPlayer(name, cid) {
-  const counts = [teamOf(G, 0).length, teamOf(G, 1).length];
-  const team = counts[0] === counts[1] ? rndi(0, 1) : counts[0] < counts[1] ? 0 : 1;
+  const team = rndi(0, 1); // 완전 무작위 (모자란 팀은 AI 친구가 채워요)
   const p = { id: G.nextId++, cid, name, team, look: lookFromName(name), x: FIELD.cx, y: FIELD.cy, vx: 0, vy: 0, flip: false, in: { jx: 0, jy: 0, b: 0, d: 0, g: 0, m: 0 }, lastB: null, lastD: 0, lastSeen: nowS(), lastMove: nowS(), cd: 0, air: 0, airMax: 1, boost: 0, pull: 0, sent: {} };
   G.players.push(p); if (cid) G.byCid.set(cid, p);
   spawnPlayer(p);
-  metaDirty(); return p;
+  metaDirty();
+  if (!String(cid || '').startsWith('ai')) syncAI();
+  return p;
 }
 function spawnPlayer(p) {
   if (G.ph === 'cheer') { cheerLayout(); return; }
   const ev = G.ev; if (ev && ev.spawn) ev.spawn(G, p, G.es); else EVENTS.lobby.spawn(G, p);
 }
-function removePlayer(p) {
+function removePlayer(p, noSync) {
   G.players = G.players.filter(x => x !== p); if (p.cid) G.byCid.delete(p.cid);
-  if (p.cid && G.net) G.net.send(p.cid, { t: 'P', kicked: 1 });
+  if (p.cid && G.net && !p.bot) G.net.send(p.cid, { t: 'P', kicked: 1 });
   metaDirty();
+  if (!p.ai && !noSync) syncAI();
+}
+// ---------- AI 친구: 팀 인원이 모자라면 채워요 (최소 3대3) ----------
+function aiOn() { try { return localStorage.getItem('sd-ai') !== '0'; } catch (e) { return true; } }
+function setAiOn(v) { try { localStorage.setItem('sd-ai', v ? '1' : '0'); } catch (e) { } syncAI(); }
+function realCount() { return G.players.filter(p => !p.ai).length; }
+function syncAI() {
+  if (G.ph === 'off') return;
+  const on = aiOn() && realCount() > 0;
+  const real = [0, 1].map(t => G.players.filter(p => p.team === t && !p.ai).length);
+  const n = Math.max(real[0], real[1], 3);
+  for (const t of [0, 1]) {
+    const ais = G.players.filter(p => p.team === t && p.ai);
+    const want = on ? n - real[t] : 0;
+    for (let k = ais.length; k > want; k--) removePlayer(ais[k - 1], true);
+    for (let k = ais.length; k < want; k++) addAI(t);
+  }
+}
+function addAI(team) {
+  const nm = 'AI ' + (shuffle(ANIMALS.slice()).find(a => !G.players.find(p => p.name === 'AI ' + a)) || G.nextId);
+  const p = addPlayer(nm, 'ai' + G.nextId); p.ai = true; p.team = team; p.bot = { tx: FIELD.cx, ty: FIELD.cy, t: 0 };
+  spawnPlayer(p); metaDirty(); return p;
 }
 function attach(p, cid) {
   if (p.cid && p.cid !== cid) { if (G.net) G.net.send(p.cid, { t: 'P', kicked: 1, why: 'moved' }); G.byCid.delete(p.cid); }
@@ -2106,6 +2130,8 @@ function enterLobby() {
 function startGames() {
   if (!G.list.length) return;
   resetToday(); G.todayStart = Date.now();
+  if (!G.manualTeams) { const L = shuffle(G.players.filter(p => !p.ai)); L.forEach((p, i) => { p.team = i % 2; sendPersonal(p); }); }
+  syncAI();
   G.rows = [{ evs: [], cheers: [] }];
   SFX.whistle(false);
   enterEvent(true);
@@ -2189,7 +2215,7 @@ function enterMResult() {
   for (const h of G.hist.filter(h => h.match === G.matchNo)) {
     if (cards.length >= 3) break;
     const ev = h.id === 'cheer' ? null : EVENTS[h.id];
-    const cand = Object.entries(h.c).map(([id, v]) => [+id, v]).filter(([id, v]) => v > 0 && !G.praised.has(id) && G.players.find(p => p.id === id)).sort((a, b) => b[1] - a[1]);
+    const cand = Object.entries(h.c).map(([id, v]) => [+id, v]).filter(([id, v]) => v > 0 && !G.praised.has(id) && G.players.find(p => p.id === id && !p.ai)).sort((a, b) => b[1] - a[1]);
     if (!cand.length) continue;
     const [pid, v] = cand[0], p = G.players.find(x => x.id === pid);
     G.praised.add(pid);
@@ -2222,7 +2248,8 @@ function enterFinal() {
   setPh('final', 0); SFX.fanfare();
 }
 function rebalanceTeams() {
-  const L = shuffle(G.players.slice()); L.forEach((p, i) => p.team = i % 2);
+  const L = shuffle(G.players.filter(p => !p.ai)); L.forEach((p, i) => p.team = i % 2);
+  syncAI();
   for (const p of G.players) { spawnPlayer(p); sendPersonal(p); }
   metaDirty();
 }
@@ -2522,7 +2549,11 @@ const TV = {
       <div class="chalk tvpanel" style="left:24px;top:226px;width:704px;height:660px;padding:14px 24px">
         <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:44px;color:var(--yellow);font-weight:700">오늘의 출석부</span><span style="font-size:26px" id="lAll"></span></div>
         <div class="roster" id="lRoster"></div>
-        <div style="position:absolute;bottom:8px;left:0;right:0;text-align:center;color:var(--yellow);font-size:20px">이름을 누르면 팀 옮기기, 이름 고치기, 내보내기</div>
+        <div style="position:absolute;bottom:8px;left:16px;right:16px;display:flex;align-items:center;gap:10px;color:var(--yellow);font-size:18px">
+          <span style="flex:1">이름을 누르면 팀 옮기기·고치기·내보내기. 시작할 때 팀을 무작위로 섞어요(직접 옮기면 그대로).</span>
+          <button class="btn" data-act="shuffle" style="font-size:17px;padding:6px 10px">팀 섞기</button>
+          <button class="btn blue" data-act="ai" id="lAI" style="font-size:17px;padding:6px 10px">AI 친구</button>
+        </div>
       </div>
       <div class="paper tvpanel" style="left:746px;top:226px;width:830px;height:284px;padding:14px 20px">
         <span class="tag">방 번호</span>
@@ -2549,11 +2580,15 @@ const TV = {
     if (G.mv === this.lastMv) return; this.lastMv = G.mv;
     const R = $('#lRoster'); if (!R) return;
     const t0 = teamOf(G, 0), t1 = teamOf(G, 1);
-    const col = (L) => L.map(p => `<button data-act="pmenu" data-id="${p.id}" class="${isConn(p) ? '' : 'off'}">${esc(p.name)}</button>`).join('');
+    const small = Math.max(t0.length, t1.length) > 14 ? ' style="font-size:21px"' : '';
+    const col = (L) => L.map(p => `<button data-act="pmenu" data-id="${p.id}" class="${isConn(p) ? '' : 'off'} ${p.ai ? 'ai' : ''}"${small}>${esc(p.name)}</button>`).join('');
     R.innerHTML = `<div><h4 class="b">청팀 ${t0.length}</h4>${col(t0)}</div><div><h4 class="w">백팀 ${t1.length}</h4>${col(t1)}</div>`;
-    $('#lAll').textContent = `모두 ${G.players.length}명`;
-    const b = $('#lStart'), ok = G.players.length >= MIN_PLAYERS;
-    b.disabled = !ok; b.innerHTML = ok ? '경기 시작' : `<span style="font-size:34px">${MIN_PLAYERS}명이 모이면 시작해요</span>`;
+    const nAI = G.players.filter(p => p.ai).length, nReal = G.players.length - nAI;
+    $('#lAll').textContent = `모두 ${nReal}명${nAI ? ` · AI ${nAI}` : ''}`;
+    const ab = $('#lAI'); if (ab) ab.textContent = aiOn() ? 'AI 친구 켜짐' : 'AI 친구 꺼짐';
+    const need = aiOn() ? Math.min(2, MIN_PLAYERS) : MIN_PLAYERS;
+    const b = $('#lStart'), ok = nReal >= need;
+    b.disabled = !ok; b.innerHTML = ok ? '경기 시작' : `<span style="font-size:34px">${need}명이 모이면 시작해요</span>`;
     const n = $('#lNev'); if (n) n.textContent = `(${G.list.length}종목)`;
   },
   // ---------- 종목 고르기 ----------
@@ -2713,7 +2748,9 @@ const TV = {
     const a = b.dataset.act;
     if (a === 'cls') this.openClass(b.dataset.id);
     else if (a === 'import') this.importFile();
-    else if (a === 'start') { if (G.players.length >= MIN_PLAYERS) startGames(); }
+    else if (a === 'start') { if (!$('#lStart').disabled) startGames(); }
+    else if (a === 'ai') { setAiOn(!aiOn()); this.lastMv = -1; this.updLobby(); }
+    else if (a === 'shuffle') { rebalanceTeams(); G.manualTeams = false; this.updLobby(); }
     else if (a === 'events') this.openEvents();
     else if (a === 'evck') { const id = b.dataset.id; if (this.pk.on.has(id)) { if (this.pk.on.size > 1 || this.pk.inGame) this.pk.on.delete(id); } else this.pk.on.add(id); this.applyEvents(); this.renderEvents(); }
     else if (a === 'evup' || a === 'evdn') { const i = +b.dataset.i, j = a === 'evup' ? i - 1 : i + 1, o = this.pk.order; if (j >= 0 && j < o.length) { [o[i], o[j]] = [o[j], o[i]]; this.applyEvents(); this.renderEvents(); } }
@@ -2747,7 +2784,7 @@ const TV = {
       <button class="btn blue" id="pmTeam">${p.team ? '청팀으로' : '백팀으로'} 옮기기</button>
       <input id="pmName" value="${esc(p.name)}" maxlength="8"><button class="btn" id="pmRen">이름 고치기</button>
       <button class="btn red" id="pmKick">내보내기</button><button class="btn light" data-act="modal-x">닫기</button></div>`);
-    $('#pmTeam').onclick = () => { p.team = 1 - p.team; spawnPlayer(p); sendPersonal(p); metaDirty(); $('#tvModal').innerHTML = ''; this.updLobby(); };
+    $('#pmTeam').onclick = () => { p.team = 1 - p.team; G.manualTeams = true; syncAI(); spawnPlayer(p); sendPersonal(p); metaDirty(); $('#tvModal').innerHTML = ''; this.updLobby(); };
     $('#pmRen').onclick = () => { const n = cleanName($('#pmName').value); if (n && !G.players.find(x => x !== p && x.name === n)) { p.name = n; p.look = lookFromName(n); sendPersonal(p); metaDirty(); $('#tvModal').innerHTML = ''; this.updLobby(); } };
     $('#pmKick').onclick = () => { removePlayer(p); $('#tvModal').innerHTML = ''; this.updLobby(); };
   },
