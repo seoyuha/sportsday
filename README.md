@@ -4,7 +4,7 @@
 운동장·체육관을 쓰기 힘든 날, 비 오는 날에 쓰려고 만들었어요. 가입이나 로그인은 없어요.
 
 - 학생: https://seoyuha.github.io/sportsday/ → 방 번호 5자리 (또는 TV의 QR)
-- TV(선생님): https://seoyuha.github.io/sportsday/?tv
+- TV(선생님): https://seoyuha.github.io/sportsday/?tv (선생님 비밀번호 필요)
 
 ## 종목 (13개)
 큰 공 굴리기 · 장애물 달리기 · 박 터뜨리기 · 판 뒤집기 · 꼬리잡기 · 줄다리기 · 피구 · 무궁화 꽃이 피었습니다 · 단체 줄넘기 · 얼음땡 · 풍선 배구 · 깃발 뺏기 · 이어달리기
